@@ -6,6 +6,7 @@ from natsort import natsorted
 import h5py
 import numpy as np
 import imageio.v3 as imageio
+import torch
 
 from torch_em.data.datasets.histopathology import pannuke
 
@@ -24,10 +25,10 @@ def _pad_image(image, target_shape=(512, 512), pad_value=0):
     return np.pad(image, pad, mode="constant", constant_values=pad_value)
 
 
-def run_interactive_segmentation(input_path, experiment_folder, model_type, start_with_box_prompt=True):
+def run_interactive_segmentation(input_path, experiment_folder, model_type, ckpt_path, start_with_box_prompt=True):
 
     # Create clone of single images in input_path directory.
-    data_dir = os.path.join(input_path, "benchmark_2d")
+    data_dir = os.path.join(input_path, "benchmark_2d_version1")
 
     if not os.path.exists(data_dir):
         # First, we get the fold 3.
@@ -51,8 +52,8 @@ def run_interactive_segmentation(input_path, experiment_folder, model_type, star
 
             # NOTE: I am padding the image below to match the shape of inputs on which it is trained, i.e. (512, 512),
             # for proper reproducibility (otherwise the results are slightly worse)
-            image = _pad_image(image)
-            label = _pad_image(label)
+            # image = _pad_image(image)
+            # label = _pad_image(label)
 
             imageio.imwrite(os.path.join(data_dir, f"pannuke_fold_3_{i:05}_image.tif"), image, compression="zlib")
             imageio.imwrite(os.path.join(data_dir, f"pannuke_fold_3_{i:05}_label.tif"), label, compression="zlib")
@@ -70,6 +71,11 @@ def run_interactive_segmentation(input_path, experiment_folder, model_type, star
 
     # Get the Segment Anything model.
     predictor = get_sam_model(model_type=model_type)
+
+    ckpt = torch.load(ckpt_path)['state_dict']
+    ckpt = {k.replace("sam.", ""): v for k, v in ckpt.items() if k.startswith("sam.")}
+    msg = predictor.model.load_state_dict(ckpt)
+    print(msg)
 
     # Then run interactive segmentation by simulating prompts from labels.
     prediction_root = os.path.join(
@@ -100,6 +106,7 @@ def main(args):
         input_path=args.input_path,
         model_type=args.model_type,
         experiment_folder=args.experiment_folder,
+        ckpt_path=args.ckpt_path,
         start_with_box_prompt=True,
     )
 
@@ -108,7 +115,8 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("-i", "--input_path", default="/mnt/vast-nhr/projects/cidas/cca/data/pannuke", type=str)
-    parser.add_argument("-e", "--experiment_folder", default="./experiments", type=str)
+    parser.add_argument("-e", "--experiment_folder", default="./experiments/pannuke", type=str)
     parser.add_argument("-m", "--model_type", default="vit_b_histopathology", type=str)
+    parser.add_argument("-c", "--ckpt_path", default=None, type=str, help="Path to the SAM checkpoint file.")
     args = parser.parse_args()
     main(args)

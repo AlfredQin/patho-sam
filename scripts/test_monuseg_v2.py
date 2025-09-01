@@ -3,40 +3,38 @@ from tqdm import tqdm
 from glob import glob
 from natsort import natsorted
 
-import h5py
 import numpy as np
 import imageio.v3 as imageio
-from typing import Literal
-from torch_em.data.datasets.histopathology import pannuke
+
 
 from micro_sam.util import get_sam_model
 from micro_sam.evaluation import inference, evaluation
-from torch_em.data.datasets.histopathology.cpm import get_cpm_paths
+from torch_em.data.datasets.histopathology.monuseg import get_monuseg_data
+from skimage.segmentation import relabel_sequential
 
-from scripts.utils import _pad_image
 
 
-def run_interactive_segmentation(
-        input_path, experiment_folder, model_type, data_choice=Literal['cpm15', 'cpm17'], split="test",
-        start_with_box_prompt=True,
-):
+def run_interactive_segmentation(input_path, experiment_folder, model_type, split="test", start_with_box_prompt=True):
 
     # Create clone of single images in input_path directory.
-    data_dir = os.path.join(input_path, f"benchmark_2d/{split}")
+    data_dir = os.path.join(input_path, f"benchmark_2d_v2/{split}")
 
     if not (os.path.exists(data_dir) and len(os.listdir(data_dir)) > 0):
         # First, we download the lizard datasets
-        raw_paths, label_paths = get_cpm_paths(path=input_path, data_choice=data_choice, download=True, split=split)
+        get_monuseg_data(path=input_path, download=True, split=split)
 
         # Then, extract image and gt mask from each h5 file
         # Store them one-by-one locally in an experiment folder.
         os.makedirs(data_dir, exist_ok=True)
-        for image_path, label_path in tqdm(zip(raw_paths, label_paths)):
-            image, label = imageio.imread(image_path), imageio.imread(label_path)
+        images_paths = glob(os.path.join(input_path, f"images/{split}/*.tif"))
+        labels_paths = glob(os.path.join(input_path, f"labels/{split}/*.tif"))
+        for image_path, label_path in tqdm(zip(images_paths, labels_paths)):
+            image, label = imageio.imread(image_path), imageio.imread(label_path).astype("uint32")
             # There has to be some foreground in the image to be considered for interactive segmentation.
             if len(np.unique(label)) == 1:
                 continue
-            # image, label = _pad_image(image, (512, 512)), _pad_image(label, (512, 512))
+            image, label = image[:512, :512, :], label[:512, :512]
+            label = relabel_sequential(label)[0]
             prefix = os.path.basename(image_path).split(".")[0]
             imageio.imwrite(os.path.join(data_dir, f"{prefix}_image.tif"), image, compression="zlib")
             imageio.imwrite(os.path.join(data_dir, f"{prefix}_mask.tif"), label, compression="zlib")
@@ -80,7 +78,6 @@ def main(args):
     run_interactive_segmentation(
         input_path=args.input_path,
         model_type=args.model_type,
-        data_choice=args.data_choice,
         experiment_folder=args.experiment_folder,
         start_with_box_prompt=args.start_with_box_prompt,
     )
@@ -89,11 +86,9 @@ def main(args):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("-i", "--input_path", default="/home/qinc/Dataset/Microscopy/Histopathology/CPM15/", type=str)
-    parser.add_argument("-e", "--experiment_folder", default="./experiments/cpm15", type=str)
+    parser.add_argument("-i", "--input_path", default="/home/qinc/Dataset/Microscopy/Histopathology/MoNuSeg/", type=str)
+    parser.add_argument("-e", "--experiment_folder", default="./experiments/monuseg", type=str)
     parser.add_argument("-m", "--model_type", default="vit_b_histopathology", type=str)
     parser.add_argument("--start_with_box_prompt", action="store_true", help="Whether to start with box prompt")
-    parser.add_argument("--data_choice", default="cpm15", type=str, choices=["cpm15", "cpm17"],
-                        help="Which CPM dataset to use (cpm15 or cpm17)")
     args = parser.parse_args()
     main(args)
